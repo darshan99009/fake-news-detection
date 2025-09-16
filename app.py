@@ -10,6 +10,18 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 import time
+import torch
+
+# Import helper functions
+from utils.helpers import (
+    preprocess_text, 
+    extract_article_from_url, 
+    load_models, 
+    predict_news,
+    validate_url,
+    get_dataset_stats,
+    get_model_performance
+)
 
 # Set page configuration
 st.set_page_config(
@@ -25,93 +37,12 @@ try:
 except:
     st.warning("Could not download NLTK stopwords. Some features might not work properly.")
 
-# Initialize text preprocessing
-stemmer = PorterStemmer()
-stop_words = set(stopwords.words('english')) if 'stopwords' in nltk.data.find('corpora') else set()
-
 # Load models with caching
 @st.cache_resource
-def load_models():
-    try:
-        model = joblib.load('models/fake_news_model_tuned.pkl')
-        vectorizer = joblib.load('models/tfidf_vectorizer.pkl')
-        return model, vectorizer
-    except Exception as e:
-        st.error(f"Error loading models: {e}")
-        return None, None
+def load_app_models():
+    return load_models()
 
-model, vectorizer = load_models()
-
-def preprocess_text(text):
-    if not text:
-        return ""
-        
-    text = re.sub(r'[^a-zA-Z\s]', '', text, re.I|re.A)
-    text = text.lower()
-    tokens = text.split()
-    tokens = [word for word in tokens if word not in stop_words]
-    tokens = [stemmer.stem(word) for word in tokens]
-    return ' '.join(tokens)
-
-def extract_article_from_url(url):
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # Remove script and style elements
-        for script in soup(["script", "style"]):
-            script.extract()
-        
-        title = soup.find('title')
-        title_text = title.get_text() if title else ""
-        
-        # Try to find main content
-        article_text = ""
-        possible_selectors = [
-            'article',
-            '.article',
-            '#article',
-            '.content',
-            '#content',
-            '.post-content',
-            '.entry-content',
-            '.story-content',
-            '[class*="content"]',
-            '[id*="content"]'
-        ]
-        
-        for selector in possible_selectors:
-            elements = soup.select(selector)
-            if elements:
-                for element in elements:
-                    article_text += element.get_text() + " "
-        
-        # If no specific content found, get all paragraphs
-        if not article_text.strip():
-            paragraphs = soup.find_all('p')
-            for p in paragraphs:
-                if len(p.get_text()) > 50:  # Only include substantial paragraphs
-                    article_text += p.get_text() + " "
-        
-        return title_text + " " + article_text
-    except Exception as e:
-        st.error(f"Error extracting article: {e}")
-        return None
-
-def predict_news(text):
-    if model is None or vectorizer is None:
-        return None, None
-        
-    processed_text = preprocess_text(text)
-    text_vector = vectorizer.transform([processed_text])
-    prediction = model.predict(text_vector)
-    probability = model.predict_proba(text_vector)
-    return prediction[0], probability[0]
+model, vectorizer = load_app_models()
 
 def main():
     st.title("📰 Advanced Fake News Detection System")
@@ -122,7 +53,7 @@ def main():
     
     # Sidebar navigation
     st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ["Home", "About", "Dataset Info"])
+    page = st.sidebar.radio("Go to", ["Home", "About", "Dataset Info", "Model Info"])
     
     if page == "Home":
         # Input method selection
@@ -132,12 +63,14 @@ def main():
         )
         
         # Model info in sidebar
-        st.sidebar.info("""
+        model_perf = get_model_performance()
+        st.sidebar.info(f"""
         **Model Information:**
         - Algorithm: Logistic Regression with hyperparameter tuning
         - Features: TF-IDF with n-grams
         - Training Data: 40,000+ news articles
-        - Accuracy: >95% on test data
+        - Accuracy: {model_perf['testing_accuracy']*100:.1f}% on test data
+        - Best Parameters: C={model_perf['best_params']['C']}, penalty={model_perf['best_params']['penalty']}
         """)
         
         # Main content area
@@ -155,6 +88,10 @@ def main():
                                placeholder="https://example.com/news-article")
             
             if url:
+                # Validate URL
+                if not validate_url(url):
+                    st.warning("This doesn't appear to be a valid news URL. Extraction may not work properly.")
+                
                 with st.spinner("Extracting article content..."):
                     content = extract_article_from_url(url)
                     if content:
@@ -172,7 +109,7 @@ def main():
                 # Add a small delay for better UX
                 time.sleep(0.5)
                 
-                prediction, probability = predict_news(content)
+                prediction, probability = predict_news(content, model, vectorizer)
                 
                 if prediction is None:
                     st.error("Model not loaded properly. Please check the model files.")
@@ -270,29 +207,115 @@ def main():
         """)
         
     elif page == "Dataset Info":
+        # Use the helper function to get dataset stats
+        stats = get_dataset_stats()
+        
         st.header("Dataset Information")
         st.markdown("""
         The model was trained on a comprehensive dataset of fake and real news articles.
+        """)
         
-        **Dataset Statistics:**
-        - Total articles: 44,898
-        - Real news: 21,417 articles
-        - Fake news: 23,481 articles
-        - Sources: Various reputable news outlets and fact-checking organizations
+        # Display dataset statistics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Articles", f"{stats['total_articles']:,}")
+        with col2:
+            st.metric("Real News Articles", f"{stats['real_news']:,}")
+        with col3:
+            st.metric("Fake News Articles", f"{stats['fake_news']:,}")
+        
+        st.markdown("""
+        **Sources:** Various reputable news outlets and fact-checking organizations
         
         **Preprocessing Steps:**
         1. Text cleaning and normalization
         2. Stopword removal
         3. Stemming
-        4. TF-IDF vectorization with n-grams
-        5. Feature selection and dimensionality reduction
+        4. Feature extraction (TF-IDF with n-grams)
+        5. Model training with hyperparameter optimization
+        """)
         
-        **Model Performance:**
-        - Training accuracy: 99.2%
-        - Testing accuracy: 96.8%
-        - Precision: 97.1%
-        - Recall: 96.5%
-        - F1-score: 96.8%
+        # Display model performance
+        perf = get_model_performance()
+        st.subheader("Model Performance")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Accuracy", f"{perf['testing_accuracy']*100:.1f}%")
+        with col2:
+            st.metric("Precision", f"{perf['precision']*100:.1f}%")
+        with col3:
+            st.metric("Recall", f"{perf['recall']*100:.1f}%")
+        with col4:
+            st.metric("F1 Score", f"{perf['f1_score']*100:.1f}%")
+            
+        st.subheader("Optimal Hyperparameters")
+        st.json(perf['best_params'])
+    
+    elif page == "Model Info":
+        st.header("Model Information")
+        st.markdown("""
+        This application uses a Logistic Regression classifier with hyperparameter tuning for fake news detection.
+        """)
+        
+        perf = get_model_performance()
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Model Architecture")
+            st.markdown("""
+            **Feature Extraction:**
+            - TF-IDF Vectorization
+            - N-gram range: (1, 2) - includes unigrams and bigrams
+            - Maximum features: 5,000
+            - Sublinear TF scaling
+            
+            **Classifier:**
+            - Logistic Regression
+            - L1 regularization (Lasso)
+            - liblinear solver
+            - Regularization strength (C): 100
+            """)
+            
+        with col2:
+            st.subheader("Performance Metrics")
+            metrics_data = {
+                'Metric': ['Accuracy', 'Precision', 'Recall', 'F1 Score', 'Training Accuracy'],
+                'Value': [
+                    f"{perf['testing_accuracy']*100:.1f}%",
+                    f"{perf['precision']*100:.1f}%",
+                    f"{perf['recall']*100:.1f}%",
+                    f"{perf['f1_score']*100:.1f}%",
+                    f"{perf['training_accuracy']*100:.1f}%"
+                ]
+            }
+            st.table(pd.DataFrame(metrics_data))
+        
+        st.subheader("Hyperparameter Tuning")
+        st.markdown("""
+        The model was optimized using Grid Search Cross-Validation with the following parameter grid:
+        
+        ```python
+        param_grid = {
+            'C': [0.1, 1, 10, 100],
+            'penalty': ['l1', 'l2'],
+            'solver': ['liblinear']
+        }
+        ```
+        
+        The optimal parameters found were:
+        """)
+        st.json(perf['best_params'])
+        
+        st.subheader("Future Enhancements")
+        st.markdown("""
+        Planned improvements for future versions:
+        - Integration of transformer models (BERT, RoBERTa)
+        - Real-time fact-checking API integration
+        - Browser extension for on-the-fly analysis
+        - Multilingual support
+        - User feedback mechanism for continuous learning
         """)
 
 if __name__ == "__main__":
