@@ -1,15 +1,6 @@
 # ... (other imports)
 
 # Import helper functions
-from utils.helpers import (
-    preprocess_text, 
-    extract_article_from_url, 
-    load_models, 
-    predict_news,
-    validate_url,
-    get_dataset_stats,
-    get_model_performance
-)
 
 # Set page configuration
 st.set_page_config(
