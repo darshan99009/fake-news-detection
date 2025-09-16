@@ -8,7 +8,9 @@
 An **AI-powered web application** that detects fake news articles using **machine learning** and **natural language processing**, optimized with hyperparameter tuning for maximum accuracy.  
 
 ---
-
+#Try it here 
+https://fake-news-detection-darshan.streamlit.app/
+---
 ## ✨ Features
 - ⚡ **Real-time Analysis** → Instant verification of news articles  
 - 🖊️ **Dual Input Methods** → Text input or URL scraping  
