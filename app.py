@@ -10,7 +10,6 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 import time
-import torch
 
 # Import helper functions
 from utils.helpers import (
